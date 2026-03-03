@@ -15,8 +15,7 @@
 #
 # Submit from the project folder:
 #   sbatch job_scripts/inference_test.sh
-#   sbatch job_scripts/inference_test.sh infer_test.py
-#   sbatch job_scripts/inference_test.sh infer_test.py --model /models/Qwen2.5-Omni-7B
+#   sbatch job_scripts/inference_test.sh --model /scratch/zli33/models/Qwen2.5-Omni-7B
 
 set -euo pipefail
 
@@ -24,15 +23,15 @@ set -euo pipefail
 # Paths
 # ---------------------------------------------------------------------------
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-project_dir="$(cd "$script_dir/.." && pwd)"
+# Under Slurm, BASH_SOURCE may point to a spool location; prefer submission dir.
+project_dir="${SLURM_SUBMIT_DIR:-$(cd "$script_dir/.." && pwd)}"
 sif_file=/scratch/zli33/apptainers/qwen2.5-omni-inference.sif
 hf_cache_host=/scratch/zli33/.cache/huggingface
 data_root_host=/scratch/zli33/data
 model_root_host=/scratch/zli33/models
 
-# Default test script + args; override from CLI
-test_script="${1:-infer_test.py}"
-shift $(( $# > 0 ? 1 : 0 ))
+# Always run workspace infer_test.py; CLI args are forwarded to the script.
+test_script="infer_test.py"
 script_args=("$@")
 
 # ---------------------------------------------------------------------------
