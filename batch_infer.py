@@ -31,6 +31,7 @@ Output JSON structure
 import argparse
 import json
 import os
+import pickle
 from pathlib import Path
 from typing import Dict, List
 
@@ -151,7 +152,7 @@ def infer_single(
 
     response = processor.batch_decode(
         output, skip_special_tokens=True, clean_up_tokenization_spaces=False
-    )[0]
+    )
     return response
 
 
@@ -269,6 +270,11 @@ def main() -> None:
         json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     print(f"\n[INFO] Results saved to {output_path.resolve()}")
+
+    pkl_path = output_path.with_suffix(".pkl")
+    with pkl_path.open("wb") as f:
+        pickle.dump(results, f)
+    print(f"[INFO] Pickle saved to {pkl_path.resolve()}")
 
 
 if __name__ == "__main__":
