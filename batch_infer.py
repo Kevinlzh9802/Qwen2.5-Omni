@@ -21,8 +21,8 @@ Output JSON structure
 =====================
 {
     "subfolder_A": [
-        {"file": "clip_01", "response": "..."},
-        {"file": "clip_02", "response": "..."}
+        {"file": "clip_01", "system": "...", "user": "...", "assistant": "..."},
+        {"file": "clip_02", "system": "...", "user": "...", "assistant": "..."}
     ],
     "subfolder_B": [...]
 }
@@ -31,7 +31,6 @@ Output JSON structure
 import argparse
 import json
 import os
-import pickle
 from pathlib import Path
 from typing import Dict, List
 
@@ -153,7 +152,46 @@ def infer_single(
     response = processor.batch_decode(
         output, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )
-    return response
+    return response[0] if response else ""
+
+
+def split_response_sections(response: str, sample_id: str) -> Dict[str, str]:
+    """Split model response into system/user/assistant sections."""
+    system_tag = "system\n"
+    user_tag = "user\n"
+    assistant_tag = "assistant\n"
+
+    sections = {"system": "", "user": "", "assistant": ""}
+
+    if not response.startswith(system_tag):
+        print(f"[WARN] {sample_id}: response does not start with 'system\\n'.")
+
+    system_pos = response.find(system_tag)
+    user_pos = response.find(user_tag)
+    assistant_pos = response.find(assistant_tag)
+
+    if system_pos != -1 and user_pos != -1 and user_pos > system_pos:
+        sections["system"] = response[system_pos + len(system_tag):user_pos].strip()
+    else:
+        print(
+            f"[WARN] {sample_id}: no matching span for 'system' between 'system\\n' and 'user\\n'."
+        )
+
+    if user_pos != -1 and assistant_pos != -1 and assistant_pos > user_pos:
+        sections["user"] = response[user_pos + len(user_tag):assistant_pos].strip()
+    else:
+        print(
+            f"[WARN] {sample_id}: no matching span for 'user' between 'user\\n' and 'assistant\\n'."
+        )
+
+    if assistant_pos != -1:
+        sections["assistant"] = response[assistant_pos + len(assistant_tag):].strip()
+    else:
+        print(
+            f"[WARN] {sample_id}: no matching span for 'assistant' after 'assistant\\n'."
+        )
+
+    return sections
 
 
 # ---------------------------------------------------------------------------
@@ -257,8 +295,17 @@ def main() -> None:
                 response = f"[ERROR] {exc}"
                 print(f"  ⚠ Error: {exc}")
 
+            response_sections = split_response_sections(
+                response,
+                sample_id=f"{subfolder_name}/{pair['stem']}",
+            )
             subfolder_results.append(
-                {"file": pair["stem"], "response": response}
+                {
+                    "file": pair["stem"],
+                    "system": response_sections["system"],
+                    "user": response_sections["user"],
+                    "assistant": response_sections["assistant"],
+                }
             )
 
         results[subfolder_name] = subfolder_results
@@ -270,11 +317,6 @@ def main() -> None:
         json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     print(f"\n[INFO] Results saved to {output_path.resolve()}")
-
-    pkl_path = output_path.with_suffix(".pkl")
-    with pkl_path.open("wb") as f:
-        pickle.dump(results, f)
-    print(f"[INFO] Pickle saved to {pkl_path.resolve()}")
 
 
 if __name__ == "__main__":
