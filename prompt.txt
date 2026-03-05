@@ -1,0 +1,7 @@
+Identify the intention you perceive of the speaker in this video. Select from 20 categories: [complain, praise, apologize, thank, criticize, care, agree, taunt, flaunt, oppose, joke, inform, advise, arrange, introduce, comfort, leave, prevent, greet, ask for help].
+
+Give the first 3 intentions that you perceive are the most probable, and assign each of them a confidence score from 1-10. 1 means you're very uncertain about itand 10 means you are absolutely certain about it. Respond only with the word of intention and the score. For example:
+
+apologize, 7
+leave, 5
+advise, 3
