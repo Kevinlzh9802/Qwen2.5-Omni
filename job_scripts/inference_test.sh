@@ -24,7 +24,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Under Slurm, BASH_SOURCE may point to a spool location; prefer submission dir.
-project_dir="${SLURM_SUBMIT_DIR:-$(cd "$script_dir/.." && pwd)}"
+project_dir=/home/zli33/projects/Qwen2.5-Omni
 sif_file=/scratch/zli33/apptainers/qwen2.5-omni-inference.sif
 hf_cache_host=/scratch/zli33/.cache/huggingface
 data_root_host=/scratch/zli33/data

@@ -22,7 +22,7 @@ set -euo pipefail
 # Paths
 # ---------------------------------------------------------------------------
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-project_dir="$(cd "$script_dir/.." && pwd)"
+project_dir=/home/zli33/projects/Qwen2.5-Omni
 sif_file=/scratch/zli33/apptainers/qwen2.5-omni-inference.sif
 hf_cache_host=/scratch/zli33/.cache/huggingface
 data_root_host=/scratch/zli33/data
