@@ -15,7 +15,8 @@ Expected data layout
 The script discovers every {.mp4, .wav} pair that shares the same stem
 inside each immediate subfolder of *data_root*, feeds each pair to the
 model together with a user-defined prompt template, and writes the
-collected responses to a single JSON file.
+collected responses to a single JSON file. Pairs in the same subfolder are
+processed as one continuous multi-turn chat ordered by filename.
 
 Output JSON structure
 =====================
@@ -96,33 +97,17 @@ def collect_av_pairs(data_root: str) -> Dict[str, List[dict]]:
 
 
 # ---------------------------------------------------------------------------
-# Single-pair inference
+# Chat inference
 # ---------------------------------------------------------------------------
 
-def infer_single(
+def infer_turn(
     model,
     processor,
-    video_path: str,
-    audio_path: str,
-    prompt: str,
-    system_prompt: str,
+    messages: List[dict],
     use_audio_in_video: bool,
     max_new_tokens: int,
 ) -> str:
-    """Run a single-turn inference for one video/audio pair and return the
-    model's text response."""
-    messages = [
-        {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
-        {
-            "role": "user",
-            "content": [
-                {"type": "audio", "audio": audio_path},
-                {"type": "video", "video": video_path},
-                {"type": "text", "text": prompt},
-            ],
-        },
-    ]
-
+    """Run one assistant turn for the current chat history."""
     text = processor.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
@@ -149,49 +134,31 @@ def infer_single(
         thinker_do_sample=False,
     )
 
+    prompt_length = inputs.input_ids.shape[1]
+    generated_ids = output[:, prompt_length:]
     response = processor.batch_decode(
-        output, skip_special_tokens=True, clean_up_tokenization_spaces=False
+        generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )
     return response[0] if response else ""
 
 
-def split_response_sections(response: str, sample_id: str) -> Dict[str, str]:
-    """Split model response into system/user/assistant sections."""
-    system_tag = "system\n"
-    user_tag = "user\n"
-    assistant_tag = "assistant\n"
+def load_prompt_templates(prompt_choice: str) -> Dict[str, str]:
+    """Load the first-turn and follow-up prompt templates for a prompt choice."""
+    prompt_dir = Path("prompts")
+    prompt_paths = {
+        "first": prompt_dir / f"{prompt_choice}_1.txt",
+        "after": prompt_dir / f"{prompt_choice}_after.txt",
+    }
 
-    sections = {"system": "", "user": "", "assistant": ""}
+    missing = [str(path) for path in prompt_paths.values() if not path.is_file()]
+    if missing:
+        missing_text = ", ".join(missing)
+        raise FileNotFoundError(f"Prompt file(s) not found: {missing_text}")
 
-    if not response.startswith(system_tag):
-        print(f"[WARN] {sample_id}: response does not start with 'system\\n'.")
-
-    system_pos = response.find(system_tag)
-    user_pos = response.find(user_tag)
-    assistant_pos = response.find(assistant_tag)
-
-    if system_pos != -1 and user_pos != -1 and user_pos > system_pos:
-        sections["system"] = response[system_pos + len(system_tag):user_pos].strip()
-    else:
-        print(
-            f"[WARN] {sample_id}: no matching span for 'system' between 'system\\n' and 'user\\n'."
-        )
-
-    if user_pos != -1 and assistant_pos != -1 and assistant_pos > user_pos:
-        sections["user"] = response[user_pos + len(user_tag):assistant_pos].strip()
-    else:
-        print(
-            f"[WARN] {sample_id}: no matching span for 'user' between 'user\\n' and 'assistant\\n'."
-        )
-
-    if assistant_pos != -1:
-        sections["assistant"] = response[assistant_pos + len(assistant_tag):].strip()
-    else:
-        print(
-            f"[WARN] {sample_id}: no matching span for 'assistant' after 'assistant\\n'."
-        )
-
-    return sections
+    return {
+        key: path.read_text(encoding="utf-8").strip()
+        for key, path in prompt_paths.items()
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +183,11 @@ def parse_args() -> argparse.Namespace:
         "--output",
         default="results.json",
         help="Path to the output JSON file (default: results.json).",
+    )
+    parser.add_argument(
+        "--prompt-choice",
+        required=True,
+        help="Prompt file prefix under prompts/, e.g. 'plain' or 'intention'.",
     )
     parser.add_argument(
         "--system-prompt",
@@ -243,12 +215,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    # --- Load prompt template ---
-    prompt_path = Path("prompt.txt")
-    if not prompt_path.is_file():
-        raise FileNotFoundError("Prompt file not found: prompt.txt (expected in working directory)")
-    prompt_template = prompt_path.read_text(encoding="utf-8").strip()
-    print(f"[INFO] Prompt template:\n{prompt_template}\n")
+    # --- Load prompt templates ---
+    prompt_templates = load_prompt_templates(args.prompt_choice)
+    print(f"[INFO] First-turn prompt ({args.prompt_choice}_1.txt):\n{prompt_templates['first']}\n")
+    print(f"[INFO] Follow-up prompt ({args.prompt_choice}_after.txt):\n{prompt_templates['after']}\n")
 
     # --- Collect all video/audio pairs ---
     av_pairs = collect_av_pairs(args.data_root)
@@ -273,38 +243,57 @@ def main() -> None:
     processed = 0
 
     for subfolder_name, pairs in av_pairs.items():
+        sorted_pairs = sorted(
+            pairs,
+            key=lambda pair: (Path(pair["video"]).name, Path(pair["audio"]).name),
+        )
         subfolder_results: list = []
-        for pair in pairs:
+        messages = [
+            {"role": "system", "content": [{"type": "text", "text": args.system_prompt}]}
+        ]
+        for pair_index, pair in enumerate(sorted_pairs):
             processed += 1
+            prompt_template = (
+                prompt_templates["first"] if pair_index == 0 else prompt_templates["after"]
+            )
             print(
                 f"[{processed}/{total_pairs}] {subfolder_name}/{pair['stem']}  ...",
                 flush=True,
             )
+            user_message = {
+                "role": "user",
+                "content": [
+                    {"type": "audio", "audio": pair["audio"]},
+                    {"type": "video", "video": pair["video"]},
+                    {"type": "text", "text": prompt_template},
+                ],
+            }
+            messages.append(user_message)
             try:
-                response = infer_single(
+                response = infer_turn(
                     model=model,
                     processor=processor,
-                    video_path=pair["video"],
-                    audio_path=pair["audio"],
-                    prompt=prompt_template,
-                    system_prompt=args.system_prompt,
+                    messages=messages,
                     use_audio_in_video=args.use_audio_in_video,
                     max_new_tokens=args.max_new_tokens,
                 )
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": response}],
+                    }
+                )
             except Exception as exc:
+                messages.pop()
                 response = f"[ERROR] {exc}"
                 print(f"  ⚠ Error: {exc}")
 
-            response_sections = split_response_sections(
-                response,
-                sample_id=f"{subfolder_name}/{pair['stem']}",
-            )
             subfolder_results.append(
                 {
                     "file": pair["stem"],
-                    "system": response_sections["system"],
-                    "user": response_sections["user"],
-                    "assistant": response_sections["assistant"],
+                    "system": args.system_prompt,
+                    "user": prompt_template,
+                    "assistant": response,
                 }
             )
 
