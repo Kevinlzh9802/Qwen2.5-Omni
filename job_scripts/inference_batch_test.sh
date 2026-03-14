@@ -14,9 +14,74 @@
 # Batch Qwen2.5-Omni inference via Apptainer.
 #
 # Submit from the project folder:
-#   sbatch job_scripts/inference_batch_test.sh
+#   sbatch job_scripts/inference_batch_test.sh -set test_run -model 7B -prompt plain
+#   sbatch job_scripts/inference_batch_test.sh -set test_run -model 3B -prompt intention
 
 set -euo pipefail
+
+model_size=7B
+set_name=""
+prompt_choice=""
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -set|--set)
+            if [ "$#" -lt 2 ]; then
+                echo "[ERROR] Missing value for $1" >&2
+                exit 1
+            fi
+            set_name="$2"
+            shift 2
+            ;;
+        -model|--model)
+            if [ "$#" -lt 2 ]; then
+                echo "[ERROR] Missing value for $1" >&2
+                exit 1
+            fi
+            model_size="$2"
+            shift 2
+            ;;
+        -prompt|--prompt)
+            if [ "$#" -lt 2 ]; then
+                echo "[ERROR] Missing value for $1" >&2
+                exit 1
+            fi
+            prompt_choice="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage: sbatch job_scripts/inference_batch_test.sh -set <dataset_folder> [-model 7B|3B] -prompt <prompt_choice>" >&2
+            exit 0
+            ;;
+        -*)
+            echo "[ERROR] Unknown option: $1" >&2
+            exit 1
+            ;;
+        *)
+            echo "[ERROR] Unexpected positional argument: $1" >&2
+            exit 1
+            ;;
+    esac
+done
+
+if [ -z "$set_name" ]; then
+    echo "Usage: sbatch job_scripts/inference_batch_test.sh -set <dataset_folder> [-model 7B|3B] -prompt <prompt_choice>" >&2
+    exit 1
+fi
+
+if [ -z "$prompt_choice" ]; then
+    echo "Usage: sbatch job_scripts/inference_batch_test.sh -set <dataset_folder> [-model 7B|3B] -prompt <prompt_choice>" >&2
+    exit 1
+fi
+
+case "$model_size" in
+    7B|3B)
+        ;;
+    *)
+        echo "[ERROR] Invalid model size: $model_size (expected 7B or 3B)" >&2
+        exit 1
+        ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -27,12 +92,15 @@ sif_file=/scratch/zli33/apptainers/qwen2.5-omni-inference.sif
 hf_cache_host=/scratch/zli33/.cache/huggingface
 data_root_host=/scratch/zli33/data
 model_root_host=/scratch/zli33/models
+gestalt_root=/scratch/zli33/data/gestalt_bench
 
 # Batch-specific paths
-data_parent=/scratch/zli33/data/gestalt_bench/test_run_part
-output_dir=/scratch/zli33/data/gestalt_bench/results/qwen2.5
+data_parent="${gestalt_root}/${set_name}"
+output_dir="${gestalt_root}/results/qwen2.5/${set_name}/${model_size}_${prompt_choice}"
 output_json="$output_dir/results.json"
-model_path=/scratch/zli33/models/Qwen2.5-Omni-7B
+model_path="/scratch/zli33/models/Qwen2.5-Omni-${model_size}"
+prompt_first="$project_dir/prompts/${prompt_choice}_1.txt"
+prompt_after="$project_dir/prompts/${prompt_choice}_after.txt"
 
 # ---------------------------------------------------------------------------
 # Pre-flight checks
@@ -48,8 +116,23 @@ if [ ! -f "$project_dir/batch_infer.py" ]; then
     exit 1
 fi
 
-if [ ! -f "$project_dir/prompt.txt" ]; then
-    echo "[ERROR] prompt.txt not found in: $project_dir" >&2
+if [ ! -d "$data_parent" ]; then
+    echo "[ERROR] Dataset folder not found: $data_parent" >&2
+    exit 1
+fi
+
+if [ ! -d "$model_path" ]; then
+    echo "[ERROR] Model path not found: $model_path" >&2
+    exit 1
+fi
+
+if [ ! -f "$prompt_first" ]; then
+    echo "[ERROR] First-turn prompt not found: $prompt_first" >&2
+    exit 1
+fi
+
+if [ ! -f "$prompt_after" ]; then
+    echo "[ERROR] Follow-up prompt not found: $prompt_after" >&2
     exit 1
 fi
 
@@ -64,8 +147,11 @@ mkdir -p "$output_dir"
 echo "[INFO] sif_file    = $sif_file"
 echo "[INFO] project_dir = $project_dir"
 echo "[INFO] hf_cache    = $hf_cache_host"
+echo "[INFO] set_name    = $set_name"
 echo "[INFO] data_parent = $data_parent"
+echo "[INFO] model_size  = $model_size"
 echo "[INFO] model_path  = $model_path"
+echo "[INFO] prompt_choice = $prompt_choice"
 echo "[INFO] output_json = $output_json"
 echo ""
 
@@ -81,7 +167,8 @@ apptainer exec --nv \
     python batch_infer.py \
         --model "$model_path" \
         --data-root "$data_parent" \
-        --output "$output_json"
+        --output "$output_json" \
+        --prompt-choice "$prompt_choice"
 
 echo ""
 echo "[INFO] Batch inference completed. Results saved to $output_json"
